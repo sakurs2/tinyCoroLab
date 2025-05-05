@@ -39,20 +39,54 @@ class task;
 
 namespace detail
 {
+enum class coro_state : uint8_t
+{
+    normal,
+    detached
+};
+
 struct promise_base
 {
     promise_base() noexcept = default;
     ~promise_base()         = default;
 
+    inline auto set_state(coro_state state) -> void { m_state = state; }
+
+    inline auto get_state() -> coro_state { return m_state; }
+
     constexpr auto initial_suspend() noexcept { return std::suspend_always{}; }
 
-    [[CORO_TEST_USED(lab1)]] auto final_suspend() noexcept -> std::suspend_always
+    // 添加一个字段存储父协程的句柄
+    std::coroutine_handle<> continuation{nullptr};
+
+    struct final_awaiter
+    {
+        bool await_ready() const noexcept { return false; }
+
+        template<typename promise_type>
+        auto await_suspend(std::coroutine_handle<promise_type> h) noexcept -> std::coroutine_handle<>
+        {
+            // 如果有父协程，恢复父协程
+            if (h.promise().continuation)
+                return h.promise().continuation;
+
+            // 否则返回到调用者
+            return std::noop_coroutine();
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    [[CORO_TEST_USED(lab1)]] auto final_suspend() noexcept
     {
         // TODO[lab1]: Add you codes
         // Return suspend_always is incorrect,
         // so you should modify the return type and define new awaiter to return
-        return {};
+        return final_awaiter{};
     }
+
+protected:
+    coro_state m_state{coro_state::normal};
 
 #ifdef DEBUG
 public:
@@ -143,6 +177,9 @@ public:
         auto await_suspend(std::coroutine_handle<> awaiting_coroutine) noexcept -> std::coroutine_handle<>
         {
             // TODO[lab1]: Add you codes
+
+            m_coroutine.promise().continuation = awaiting_coroutine;
+
             return m_coroutine;
         }
 
@@ -209,6 +246,18 @@ public:
     [[CORO_TEST_USED(lab1)]] auto detach() -> void
     {
         // TODO[lab1]: Add you codes
+        if (m_coroutine)
+        {
+            // 设置一个空的continuation表示没有父协程
+            m_coroutine.promise().continuation = std::noop_coroutine();
+            m_coroutine.promise().set_state(detail::coro_state::detached);
+
+            // 开始执行协程
+            // m_coroutine.resume();
+
+            // 释放task对协程的所有权，但不销毁协程
+            m_coroutine = nullptr;
+        }
     }
 
     auto operator co_await() const& noexcept
@@ -252,6 +301,16 @@ using coroutine_handle = std::coroutine_handle<detail::promise_base>;
 [[CORO_TEST_USED(lab1)]] inline auto clean(std::coroutine_handle<> handle) noexcept -> void
 {
     // TODO[lab1]: Add you codes
+    auto  specific_handle = coroutine_handle::from_address(handle.address());
+    auto& promise         = specific_handle.promise();
+    switch (promise.get_state())
+    {
+        case detail::coro_state::detached:
+            handle.destroy();
+            break;
+        default:
+            break;
+    }
 }
 
 namespace detail
