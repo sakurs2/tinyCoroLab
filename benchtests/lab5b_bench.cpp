@@ -25,7 +25,6 @@ void notify_all_tp(std::condition_variable& cv, std::mutex& mtx, int& gid, const
     loop_add;
     gid += 1;
     cv.notify_all();
-    mtx.unlock();
 }
 
 static void threadpool_stl_cv_notifyall(benchmark::State& state)
@@ -41,7 +40,7 @@ static void threadpool_stl_cv_notifyall(benchmark::State& state)
 
         for (int i = thread_num - 1; i >= 0; i--)
         {
-            pool.submit_task([&]() { notify_all_tp(cv, mtx, gid, i, loop_num); });
+            pool.submit_task([&, i]() { notify_all_tp(cv, mtx, gid, i, loop_num); });
         }
         pool.start();
         pool.join();
@@ -57,7 +56,6 @@ task<> notify_all(std::condition_variable& cv, std::mutex& mtx, int& gid, const 
     loop_add;
     gid += 1;
     cv.notify_all();
-    mtx.unlock();
     co_return;
 }
 
@@ -74,8 +72,10 @@ CORO_BENCHMARK3(coro_stl_cv_notifyall, 100, 100000, 100000000);
 
 task<> notify_all(condition_variable& cv, mutex& mtx, int& gid, const int id, const int loop_num)
 {
-    co_await mtx.lock_guard();
-    cv.wait(mtx, [&]() { return gid == id; });
+    auto lock = co_await mtx.lock_guard();
+    co_await cv.wait(mtx, [&]() { return gid == id; });
+    loop_add;
+    gid += 1;
     cv.notify_all();
 }
 
@@ -121,7 +121,7 @@ static void threadpool_stl_cv_notifyone(benchmark::State& state)
 
         for (int i = 0; i < 2; i++)
         {
-            pool.submit_task([&]() { notify_one_tp(cv, mtx, gid, i, notifyone_run_cnt); });
+            pool.submit_task([&, i]() { notify_one_tp(cv, mtx, gid, i, notifyone_run_cnt); });
         }
         pool.start();
         pool.join();
@@ -157,8 +157,8 @@ task<> notify_one(condition_variable& cv, mutex& mtx, int& gid, const int id, in
 {
     while (run_cnt > 0)
     {
-        co_await mtx.lock_guard();
-        cv.wait(mtx, [&]() { return id == gid; });
+        auto lock = co_await mtx.lock_guard();
+        co_await cv.wait(mtx, [&]() { return id == gid; });
         gid = (gid + 1) % 2;
         run_cnt -= 1;
         cv.notify_one();
